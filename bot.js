@@ -27,6 +27,14 @@ let alertCooldown = 60 * 60 * 1000; // Only alert once per hour
 
 const ORDER_NOTIFICATION_CHANNEL_ID = '1437507548122185840';
 
+// ============================================
+// PAYMENT VERIFICATION MONITORING
+// ============================================
+
+const PAYMENT_CHECK_INTERVAL = 10 * 1000; // Check every 10 seconds
+const TICKET_GUILD_ID = process.env.GUILD_ID; // Discord server ID
+const TICKET_CATEGORY_ID = process.env.CATEGORY_ID; // Category for order tickets
+
 function startVccInventoryMonitoring() {
   console.log(`📊 VCC Inventory Monitoring started (checking every ${VCC_CHECK_INTERVAL / 60000} minutes)`);
 
@@ -88,6 +96,129 @@ async function checkVccInventoryAndAlert() {
 
   } catch (error) {
     console.error('❌ [VCC Monitor] Error checking inventory:', error);
+  }
+}
+
+function startPaymentVerificationMonitoring() {
+  console.log(`💳 Payment Verification Monitoring started (checking every ${PAYMENT_CHECK_INTERVAL / 1000} seconds)`);
+
+  // Start checking immediately, then every interval
+  checkPaymentVerifiedOrders();
+  setInterval(checkPaymentVerifiedOrders, PAYMENT_CHECK_INTERVAL);
+}
+
+async function checkPaymentVerifiedOrders() {
+  try {
+    // Find orders with payment verified but no Discord ticket created yet
+    const orders = await Order.find({
+      status: 'payment_verified',
+      discordChannelId: null
+    }).limit(10); // Process max 10 orders per check
+
+    if (orders.length > 0) {
+      console.log(`[Payment Monitor] Found ${orders.length} payment-verified order(s) without tickets`);
+
+      for (const order of orders) {
+        try {
+          await createDiscordTicket(order);
+        } catch (error) {
+          console.error(`❌ [Payment Monitor] Failed to create ticket for order ${order.orderNumber}:`, error);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('❌ [Payment Monitor] Error checking payment-verified orders:', error);
+  }
+}
+
+async function createDiscordTicket(order) {
+  try {
+    // Fetch guild and category
+    const guild = await client.guilds.fetch(TICKET_GUILD_ID);
+    if (!guild) {
+      console.error(`❌ [Payment Monitor] Guild ${TICKET_GUILD_ID} not found`);
+      return;
+    }
+
+    const category = guild.channels.cache.get(TICKET_CATEGORY_ID);
+    if (!category) {
+      console.error(`❌ [Payment Monitor] Category ${TICKET_CATEGORY_ID} not found`);
+      return;
+    }
+
+    // Create ticket channel
+    const channelName = `order-${order.orderNumber}`;
+    const ticketChannel = await guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: TICKET_CATEGORY_ID,
+      permissionOverwrites: [
+        {
+          id: guild.id,
+          deny: [PermissionFlagsBits.ViewChannel]
+        },
+        {
+          id: client.user.id,
+          allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages]
+        }
+      ]
+    });
+
+    console.log(`✅ [Payment Monitor] Created ticket channel #${channelName} (${ticketChannel.id})`);
+
+    // Fetch user details
+    const user = await User.findById(order.userId);
+    const userName = user ? (user.name || user.email || 'Unknown') : 'Unknown';
+
+    // Format payment method
+    let paymentInfo = '';
+    if (order.paymentMethod === 'venmo') {
+      paymentInfo = `💳 **Venmo** - $${(order.totalCents / 100).toFixed(2)}`;
+    } else if (order.paymentMethod === 'crypto') {
+      paymentInfo = `🔐 **Cryptocurrency** - $${(order.totalCents / 100).toFixed(2)}`;
+    }
+
+    // Create embed
+    const embed = {
+      color: 0x5865F2,
+      title: `🎫 New Order: ${order.orderNumber}`,
+      description: `Payment verified and ready for processing`,
+      fields: [
+        { name: '👤 Customer', value: userName, inline: true },
+        { name: '💰 Payment', value: paymentInfo, inline: true },
+        { name: '📍 Delivery Address', value: order.deliveryAddress || 'Not provided', inline: false },
+        { name: '🍔 Items', value: order.itemsDescription || 'See group order link', inline: false },
+        { name: '🔗 Group Order Link', value: order.groupOrderLink || 'Not provided', inline: false }
+      ],
+      footer: { text: 'Click Claim to start processing this order' },
+      timestamp: new Date()
+    };
+
+    // Create buttons
+    const claimButton = new ButtonBuilder()
+      .setCustomId(`claim_${order.orderNumber}`)
+      .setLabel('🎫 Claim Ticket')
+      .setStyle(ButtonStyle.Primary);
+
+    const row = new ActionRowBuilder().addComponents(claimButton);
+
+    // Send ticket message
+    await ticketChannel.send({
+      content: '@here New order ready for processing!',
+      embeds: [embed],
+      components: [row]
+    });
+
+    // Update order in database
+    order.discordChannelId = ticketChannel.id;
+    order.status = 'queued'; // Now available for automation queue
+    await order.save();
+
+    console.log(`✅ [Payment Monitor] Order ${order.orderNumber} updated: discordChannelId=${ticketChannel.id}, status=queued`);
+
+  } catch (error) {
+    console.error(`❌ [Payment Monitor] Error creating ticket for order ${order.orderNumber}:`, error);
+    throw error;
   }
 }
 
@@ -205,6 +336,7 @@ client.once('ready', () => {
   console.log(`🔔 Logged in as ${client.user.tag}`);
 
   startVccInventoryMonitoring();
+  startPaymentVerificationMonitoring();
 });
 
 // ============================================
