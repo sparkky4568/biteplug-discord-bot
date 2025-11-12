@@ -346,6 +346,12 @@ client.once('ready', () => {
 client.on('messageCreate', async (message) => {
   if (message.author.bot) return;
 
+  // /ping command - Simple test to verify bot is responding
+  if (message.content.toLowerCase() === '/ping') {
+    await message.reply('🏓 Pong! Bot is online and responding.');
+    return;
+  }
+
   // /vcc-stats command
   if (message.content.toLowerCase() === '/vcc-stats') {
     try {
