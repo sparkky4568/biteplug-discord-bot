@@ -7,15 +7,20 @@ const { Order, DailyStats } = require('./models');
  * @param {Interaction} interaction - Discord interaction object
  */
 async function handleSlashCommand(interaction) {
-  // Verify user has admin permissions
+  const { commandName } = interaction;
+
+  // Allow /ping for everyone (no admin check)
+  if (commandName === 'ping') {
+    return handlePing(interaction);
+  }
+
+  // Verify user has admin permissions for all other commands
   if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
     return interaction.reply({
       content: '❌ You do not have permission to use this command. (Admin only)',
       ephemeral: true,
     });
   }
-
-  const { commandName } = interaction;
 
   try {
     switch (commandName) {
@@ -373,6 +378,18 @@ async function handleAnnounce(interaction) {
     console.error('❌ Error sending announcement:', error);
     await interaction.editReply('❌ Failed to send announcement.');
   }
+}
+
+/**
+ * /ping - Test if bot is responding (available to everyone)
+ */
+async function handlePing(interaction) {
+  const latency = interaction.client.ws.ping;
+
+  await interaction.reply({
+    content: `🏓 Pong! Bot is online and responding.\n📡 Latency: **${latency}ms**`,
+    ephemeral: true,
+  });
 }
 
 module.exports = { handleSlashCommand };
