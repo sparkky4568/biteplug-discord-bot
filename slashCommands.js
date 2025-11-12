@@ -9,12 +9,7 @@ const { Order, DailyStats } = require('./models');
 async function handleSlashCommand(interaction) {
   const { commandName } = interaction;
 
-  // Allow /ping for everyone (no admin check)
-  if (commandName === 'ping') {
-    return handlePing(interaction);
-  }
-
-  // Verify user has admin permissions for all other commands
+  // Verify user has admin permissions (all commands are admin only)
   if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
     return interaction.reply({
       content: '❌ You do not have permission to use this command. (Admin only)',
@@ -24,6 +19,9 @@ async function handleSlashCommand(interaction) {
 
   try {
     switch (commandName) {
+      case 'ping':
+        await handlePing(interaction);
+        break;
       case 'vcc-stats':
         await handleVccStats(interaction);
         break;
@@ -384,7 +382,7 @@ async function handleAnnounce(interaction) {
 }
 
 /**
- * /ping - Test if bot is responding (available to everyone)
+ * /ping - Test if bot is responding (Admin only)
  */
 async function handlePing(interaction) {
   const latency = interaction.client.ws.ping;
