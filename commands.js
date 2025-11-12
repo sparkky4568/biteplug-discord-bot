@@ -45,5 +45,17 @@ module.exports = [
         required: true
       }
     ]
+  },
+  {
+    name: 'vcc-upload',
+    description: 'Upload VCCs from a .txt file to the database (Admin only)',
+    options: [
+      {
+        name: 'file',
+        description: 'Text file with VCCs (format: card_number,exp_date,cvv,zip,email)',
+        type: 11, // ATTACHMENT type
+        required: true
+      }
+    ]
   }
 ];

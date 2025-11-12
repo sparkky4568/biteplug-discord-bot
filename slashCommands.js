@@ -42,6 +42,9 @@ async function handleSlashCommand(interaction) {
       case 'announce':
         await handleAnnounce(interaction);
         break;
+      case 'vcc-upload':
+        await handleVccUpload(interaction);
+        break;
       default:
         await interaction.reply({
           content: '❌ Unknown command.',
@@ -390,6 +393,136 @@ async function handlePing(interaction) {
     content: `🏓 Pong! Bot is online and responding.\n📡 Latency: **${latency}ms**`,
     ephemeral: true,
   });
+}
+
+/**
+ * /vcc-upload - Upload VCCs from .txt file (Admin only)
+ */
+async function handleVccUpload(interaction) {
+  await interaction.deferReply();
+
+  try {
+    // Get the uploaded file
+    const attachment = interaction.options.getAttachment('file');
+
+    // Validate file extension
+    if (!attachment.name.endsWith('.txt')) {
+      return interaction.editReply({
+        content: '❌ Invalid file type. Please upload a .txt file.',
+      });
+    }
+
+    // Validate file size (10MB limit)
+    const MAX_SIZE = 10 * 1024 * 1024; // 10MB
+    if (attachment.size > MAX_SIZE) {
+      return interaction.editReply({
+        content: '❌ File too large. Maximum file size is 10MB.',
+      });
+    }
+
+    // Download and parse file
+    const response = await fetch(attachment.url);
+    const fileContent = await response.text();
+
+    const cardStrings = fileContent
+      .split('\n')
+      .map(line => line.trim())
+      .filter(line => line.length > 0);
+
+    if (cardStrings.length === 0) {
+      return interaction.editReply({
+        content: '❌ File is empty or contains no valid data.',
+      });
+    }
+
+    // Send validation message
+    await interaction.editReply({
+      content: `🔍 **Validating ${cardStrings.length} VCCs...**\n\n**Format:** \`card_number,exp_date,cvv,zip,email\`\n• Card: Exactly 16 digits\n• Exp: MM/YY format\n• CVV: Exactly 3 digits\n• ZIP: Exactly 5 digits\n• Email: Valid format`,
+    });
+
+    // Strict validation - all or nothing
+    const results = await vccService.bulkAddVccsStrict(cardStrings);
+
+    if (!results.success) {
+      // Build error message
+      let errorMsg = '❌ **VCC Upload Failed - Validation Errors**\n\n';
+
+      if (results.errors.length > 0) {
+        errorMsg += '**Format Errors:**\n';
+        const displayErrors = results.errors.slice(0, 10);
+        for (const err of displayErrors) {
+          errorMsg += `🚫 **Line ${err.lineNumber}:** ${err.error}\n   \`${err.card}\`\n\n`;
+        }
+        if (results.errors.length > 10) {
+          errorMsg += `... and ${results.errors.length - 10} more format errors\n\n`;
+        }
+      }
+
+      if (results.duplicates.length > 0) {
+        errorMsg += '**Duplicate Cards:**\n';
+        const displayDupes = results.duplicates.slice(0, 10);
+        for (const dup of displayDupes) {
+          errorMsg += `🔄 **Line ${dup.lineNumber}:** ${dup.error}\n   \`${dup.card}\`\n\n`;
+        }
+        if (results.duplicates.length > 10) {
+          errorMsg += `... and ${results.duplicates.length - 10} more duplicates\n\n`;
+        }
+      }
+
+      errorMsg += `📝 **Total errors:** ${results.errors.length + results.duplicates.length} out of ${cardStrings.length} lines\n\n`;
+      errorMsg += '⚠️ **No VCCs were added to the database.**\nFix the errors and upload again.';
+
+      // Split message if too long (Discord limit: 2000 chars)
+      if (errorMsg.length > 2000) {
+        await interaction.editReply(errorMsg.substring(0, 1997) + '...');
+
+        // Send remaining errors as follow-up
+        const remaining = errorMsg.substring(1997);
+        const chunks = [];
+        for (let i = 0; i < remaining.length; i += 2000) {
+          chunks.push(remaining.substring(i, i + 2000));
+        }
+
+        for (const chunk of chunks) {
+          await interaction.followUp(chunk);
+        }
+      } else {
+        await interaction.editReply(errorMsg);
+      }
+
+      console.log(`❌ [/vcc-upload] Failed by ${interaction.user.username}: ${results.errors.length} errors, ${results.duplicates.length} duplicates`);
+      return;
+    }
+
+    // Success - create embed
+    const successEmbed = new EmbedBuilder()
+      .setColor(0x57F287)
+      .setTitle('✅ VCC Upload Successful')
+      .setDescription('🎉 All VCCs validated and uploaded!')
+      .addFields(
+        { name: '📊 Lines processed', value: `${cardStrings.length}`, inline: true },
+        { name: '✅ Valid VCCs', value: `${results.added}`, inline: true },
+        { name: '💾 Added to database', value: `${results.added}`, inline: true }
+      )
+      .setFooter({ text: `Uploaded by ${interaction.user.username}` })
+      .setTimestamp();
+
+    await interaction.editReply({ content: null, embeds: [successEmbed] });
+
+    console.log(`✅ [/vcc-upload] Success by ${interaction.user.username}: ${results.added} cards added from file ${attachment.name}`);
+
+  } catch (error) {
+    console.error('❌ [/vcc-upload] Error:', error);
+
+    if (interaction.deferred) {
+      await interaction.editReply('❌ An error occurred during VCC upload. Check logs for details.');
+    } else {
+      await interaction.reply({
+        content: '❌ An error occurred during VCC upload. Check logs for details.',
+        ephemeral: true,
+      });
+    }
+  }
 }
 
 module.exports = { handleSlashCommand };
