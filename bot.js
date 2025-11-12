@@ -464,132 +464,13 @@ client.on('messageCreate', async (message) => {
     return;
   }
 
-  // /vcc-upload command (strict validation)
-  if (message.content.toLowerCase() === '/vcc-upload') {
-    try {
-      await message.reply('📤 **VCC Upload Ready**\n\nPlease upload your .txt file with VCCs in the next message.\n\n**Required format:** `card_number,exp_date,cvv,zip_code,email`\n**Example:** `4532156789012345,12/25,123,10001,test@example.com`\n\n**Validation rules:**\n• Card number: Exactly 16 digits\n• Expiration: MM/YY format\n• CVV: Exactly 3 digits\n• ZIP: Exactly 5 digits\n• Email: Valid format (must have @ and .)');
-
-      // Wait for file upload
-      const filter = m => m.author.id === message.author.id && m.attachments.size > 0;
-      const collected = await message.channel.awaitMessages({ filter, max: 1, time: 60000, errors: ['time'] });
-
-      const uploadMessage = collected.first();
-      const attachment = uploadMessage.attachments.first();
-
-      if (!attachment.name.endsWith('.txt')) {
-        await uploadMessage.reply('❌ Please upload a .txt file.');
-        return;
-      }
-
-      await uploadMessage.reply('🔍 Validating VCCs... Please wait.');
-
-      const response = await fetch(attachment.url);
-      const fileContent = await response.text();
-
-      const cardStrings = fileContent
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line.length > 0);
-
-      if (cardStrings.length === 0) {
-        await uploadMessage.reply('❌ File is empty or contains no valid data.');
-        return;
-      }
-
-      // Strict validation
-      const results = await vccService.bulkAddVccsStrict(cardStrings);
-
-      if (!results.success) {
-        // Build error message
-        let errorMsg = '❌ **VCC Upload Failed - Validation Errors**\n\n';
-
-        if (results.errors.length > 0) {
-          errorMsg += '**Format Errors:**\n';
-          const displayErrors = results.errors.slice(0, 10); // Show first 10 errors
-          for (const err of displayErrors) {
-            errorMsg += `🚫 **Line ${err.lineNumber}:** ${err.error}\n   \`${err.card}\`\n\n`;
-          }
-          if (results.errors.length > 10) {
-            errorMsg += `... and ${results.errors.length - 10} more format errors\n\n`;
-          }
-        }
-
-        if (results.duplicates.length > 0) {
-          errorMsg += '**Duplicate Cards:**\n';
-          const displayDupes = results.duplicates.slice(0, 10); // Show first 10 duplicates
-          for (const dup of displayDupes) {
-            errorMsg += `🔄 **Line ${dup.lineNumber}:** ${dup.error}\n   \`${dup.card}\`\n\n`;
-          }
-          if (results.duplicates.length > 10) {
-            errorMsg += `... and ${results.duplicates.length - 10} more duplicates\n\n`;
-          }
-        }
-
-        errorMsg += `📝 **Total errors:** ${results.errors.length + results.duplicates.length} out of ${cardStrings.length} lines\n\n`;
-        errorMsg += '⚠️ **No VCCs were added to the database.**\nPlease fix the errors and try again.';
-
-        // Split message if too long
-        if (errorMsg.length > 2000) {
-          const chunks = [];
-          let currentChunk = '';
-          const lines = errorMsg.split('\n');
-          for (const line of lines) {
-            if ((currentChunk + line + '\n').length > 2000) {
-              chunks.push(currentChunk);
-              currentChunk = line + '\n';
-            } else {
-              currentChunk += line + '\n';
-            }
-          }
-          if (currentChunk) chunks.push(currentChunk);
-
-          for (const chunk of chunks) {
-            await uploadMessage.reply(chunk);
-          }
-        } else {
-          await uploadMessage.reply(errorMsg);
-        }
-
-        console.log(`❌ VCC upload failed by ${message.author.username}: ${results.errors.length} errors, ${results.duplicates.length} duplicates`);
-        return;
-      }
-
-      // Success
-      const successEmbed = {
-        color: 0x57F287,
-        title: '✅ VCC Upload Successful',
-        description: '🎉 All VCCs uploaded successfully!',
-        fields: [
-          { name: '📊 Total lines processed', value: `${cardStrings.length}`, inline: true },
-          { name: '✅ Valid VCCs', value: `${results.added}`, inline: true },
-          { name: '💾 Added to database', value: `${results.added}`, inline: true }
-        ],
-        timestamp: new Date()
-      };
-
-      await uploadMessage.reply({ embeds: [successEmbed] });
-
-      console.log(`✅ VCC upload successful by ${message.author.username}: ${results.added} cards added`);
-
-    } catch (error) {
-      if (error.message === 'time') {
-        await message.reply('❌ Upload timeout. Please run `/vcc-upload` again and upload the file within 60 seconds.');
-      } else {
-        console.error('❌ Error with /vcc-upload command:', error);
-        await message.reply('❌ An error occurred during VCC upload.');
-      }
-    }
-
-    return;
-  }
-
-  // VCC file upload (txt file attachment) - Legacy method (allows partial uploads)
+  // VCC file upload - Just upload a .txt file with one VCC per line
   if (message.attachments.size > 0) {
     const attachment = message.attachments.first();
 
     if (attachment.name.endsWith('.txt')) {
       try {
-        await message.reply('📥 Processing VCC file... Please wait.\n\n💡 **Tip:** Use `/vcc-upload` for strict validation that prevents partial uploads.');
+        await message.reply('🔍 **Validating VCCs...**\n\n**Format:** `card_number,exp_date,cvv,zip_code,email`\n• Card: Exactly 16 digits\n• Exp: MM/YY format\n• CVV: Exactly 3 digits\n• ZIP: Exactly 5 digits\n• Email: Valid format');
 
         const response = await fetch(attachment.url);
         const fileContent = await response.text();
@@ -604,42 +485,84 @@ client.on('messageCreate', async (message) => {
           return;
         }
 
-        const results = await vccService.bulkAddVccs(cardStrings);
+        // Strict validation - all or nothing
+        const results = await vccService.bulkAddVccsStrict(cardStrings);
 
-        const embed = {
-          color: results.failed > 0 ? 0xFF9500 : 0x57F287,
-          title: '💳 VCC Upload Results',
+        if (!results.success) {
+          // Build error message
+          let errorMsg = '❌ **VCC Upload Failed - Validation Errors**\n\n';
+
+          if (results.errors.length > 0) {
+            errorMsg += '**Format Errors:**\n';
+            const displayErrors = results.errors.slice(0, 10);
+            for (const err of displayErrors) {
+              errorMsg += `🚫 **Line ${err.lineNumber}:** ${err.error}\n   \`${err.card}\`\n\n`;
+            }
+            if (results.errors.length > 10) {
+              errorMsg += `... and ${results.errors.length - 10} more format errors\n\n`;
+            }
+          }
+
+          if (results.duplicates.length > 0) {
+            errorMsg += '**Duplicate Cards:**\n';
+            const displayDupes = results.duplicates.slice(0, 10);
+            for (const dup of displayDupes) {
+              errorMsg += `🔄 **Line ${dup.lineNumber}:** ${dup.error}\n   \`${dup.card}\`\n\n`;
+            }
+            if (results.duplicates.length > 10) {
+              errorMsg += `... and ${results.duplicates.length - 10} more duplicates\n\n`;
+            }
+          }
+
+          errorMsg += `📝 **Total errors:** ${results.errors.length + results.duplicates.length} out of ${cardStrings.length} lines\n\n`;
+          errorMsg += '⚠️ **No VCCs were added to the database.**\nFix the errors and upload again.';
+
+          // Split message if too long
+          if (errorMsg.length > 2000) {
+            const chunks = [];
+            let currentChunk = '';
+            const lines = errorMsg.split('\n');
+            for (const line of lines) {
+              if ((currentChunk + line + '\n').length > 2000) {
+                chunks.push(currentChunk);
+                currentChunk = line + '\n';
+              } else {
+                currentChunk += line + '\n';
+              }
+            }
+            if (currentChunk) chunks.push(currentChunk);
+
+            for (const chunk of chunks) {
+              await message.reply(chunk);
+            }
+          } else {
+            await message.reply(errorMsg);
+          }
+
+          console.log(`❌ VCC upload failed by ${message.author.username}: ${results.errors.length} errors, ${results.duplicates.length} duplicates`);
+          return;
+        }
+
+        // Success
+        const successEmbed = {
+          color: 0x57F287,
+          title: '✅ VCC Upload Successful',
+          description: '🎉 All VCCs validated and uploaded!',
           fields: [
-            { name: '✅ Successfully Added', value: `${results.added}`, inline: true },
-            { name: '❌ Failed', value: `${results.failed}`, inline: true },
-            { name: '📊 Total Processed', value: `${cardStrings.length}`, inline: true }
+            { name: '📊 Lines processed', value: `${cardStrings.length}`, inline: true },
+            { name: '✅ Valid VCCs', value: `${results.added}`, inline: true },
+            { name: '💾 Added to database', value: `${results.added}`, inline: true }
           ],
           timestamp: new Date()
         };
 
-        if (results.failed > 0 && results.errors.length > 0) {
-          const errorMessages = results.errors.slice(0, 5).map(err =>
-            `• ${err.error}`
-          ).join('\n');
+        await message.reply({ embeds: [successEmbed] });
 
-          embed.fields.push({
-            name: '⚠️ Error Details (first 5)',
-            value: errorMessages,
-            inline: false
-          });
-
-          if (results.errors.length > 5) {
-            embed.footer = { text: `... and ${results.errors.length - 5} more errors` };
-          }
-        }
-
-        await message.reply({ embeds: [embed] });
-
-        console.log(`📥 VCC file uploaded by ${message.author.username}: ${results.added} added, ${results.failed} failed`);
+        console.log(`✅ VCC upload successful by ${message.author.username}: ${results.added} cards added`);
 
       } catch (error) {
         console.error('❌ Error processing VCC file:', error);
-        await message.reply('❌ Failed to process VCC file. Make sure the format is correct:\n`card_number,exp_date,cvv,zip_code,email`');
+        await message.reply('❌ An error occurred during VCC upload.');
       }
 
       return;
